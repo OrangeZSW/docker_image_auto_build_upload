@@ -30,7 +30,11 @@ let state = {
 
 // 存储定时器引用
 let monitorInterval = null;
-const RETRY_CONFIG = { maxRetries: 3, retryDelay: 5000, timeout: 30000 };
+const RETRY_CONFIG = {
+    maxRetries: 5,           // 最大重试次数
+    retryDelay: 180000,      // 重试延迟：3分钟 (3 * 60 * 1000 = 180000ms)
+    timeout: 1200000         // 单次操作超时：20分钟 (20 * 60 * 1000 = 1200000ms)
+};
 
 // 路由 - 获取配置
 app.get('/api/config', (req, res) => {
