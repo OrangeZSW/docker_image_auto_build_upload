@@ -43,9 +43,25 @@
                     <label for="pollInterval">检查间隔（分钟）</label>
                     <input type="number" id="pollInterval" min="1" value="5">
                 </div>
+
+                <div class="form-group">
+                    <label for="aliyunRegistry">阿里云镜像仓库地址</label>
+                    <input type="text" id="aliyunRegistry" placeholder="registry.cn-hangzhou.aliyuncs.com" value="registry.cn-hangzhou.aliyuncs.com">
+                </div>
+
+                <div class="form-group">
+                    <label for="dockerUsername">Docker用户名</label>
+                    <input type="text" id="dockerUsername" placeholder="阿里云用户名">
+                </div>
+
+                <div class="form-group">
+                    <label for="dockerPassword">Docker密码</label>
+                    <input type="password" id="dockerPassword" placeholder="阿里云密码或访问令牌">
+                </div>
             </div>
 
             <button id="saveConfig">保存配置</button>
+            <button id="testDockerLogin">测试Docker登录</button>
             <button id="startMonitor">开始监控</button>
             <button id="stopMonitor" class="btn-danger">停止监控</button>
         </div>
@@ -56,6 +72,7 @@
             <div class="status-info">
                 <p><span class="status-indicator status-inactive" id="statusIndicator"></span> 监控状态: <span id="monitorStatus">未运行</span></p>
                 <p>最后检查: <span id="lastCheck">从未</span></p>
+                <p>Docker登录状态: <span id="dockerLoginStatus">未测试</span></p>
             </div>
 
             <h3>仓库状态</h3>
@@ -71,6 +88,13 @@
             <h3>实时日志</h3>
             <div class="log-container" id="logContainer">
                 <div class="log-entry log-info">系统就绪，等待配置...</div>
+            </div>
+
+            <h3>构建历史</h3>
+            <div class="build-history" id="buildHistory">
+                <div class="history-item">
+                    <span>暂无构建记录</span>
+                </div>
             </div>
         </div>
     </div>
@@ -128,6 +152,36 @@
             <button id="saveRepoConfig">保存</button>
             <button id="triggerBuildModal">立即构建</button>
             <button class="btn-danger" id="cancelRepoEdit">取消</button>
+        </div>
+    </div>
+</div>
+
+<!-- 仓库详情模态框 -->
+<div class="modal" id="repoDetailModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="repoDetailTitle">仓库详情</h2>
+            <span class="close">&times;</span>
+        </div>
+        <div class="modal-body">
+            <div class="repo-detail-info">
+                <p><strong>Git地址:</strong> <span id="detailGitUrl"></span></p>
+                <p><strong>分支:</strong> <span id="detailBranch"></span></p>
+                <p><strong>镜像:</strong> <span id="detailImage"></span></p>
+                <p><strong>状态:</strong> <span id="detailStatus"></span></p>
+                <p><strong>最后构建:</strong> <span id="detailLastBuild"></span></p>
+            </div>
+
+            <h3>构建历史</h3>
+            <div class="repo-build-history" id="repoBuildHistory">
+                <div class="history-item">
+                    <span>暂无构建记录</span>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button id="triggerBuildDetail">立即构建</button>
+            <button class="btn-danger" id="closeRepoDetail">关闭</button>
         </div>
     </div>
 </div>

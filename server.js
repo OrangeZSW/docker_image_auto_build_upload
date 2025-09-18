@@ -16,24 +16,21 @@ app.use(express.static('public'));
 let config = {
     repositories: [],
     aliyunRegistry: 'registry.cn-hangzhou.aliyuncs.com',
-    pollInterval: 5
+    pollInterval: 5,
+    dockerUsername: '',
+    dockerPassword: ''
 };
 
 let state = {
     monitoring: false,
     lastCheck: null,
+    dockerLoggedIn: false,
     repositories: {}
 };
 
-// 存储定时器引用（不在状态对象中）
+// 存储定时器引用
 let monitorInterval = null;
-
-// 重试配置
-const RETRY_CONFIG = {
-    maxRetries: 3,
-    retryDelay: 5000, // 5秒
-    timeout: 30000    // 30秒超时
-};
+const RETRY_CONFIG = { maxRetries: 3, retryDelay: 5000, timeout: 30000 };
 
 // 路由 - 获取配置
 app.get('/api/config', (req, res) => {
@@ -42,25 +39,120 @@ app.get('/api/config', (req, res) => {
 
 // 路由 - 保存配置
 app.post('/api/config', (req, res) => {
-    config = { ...config, ...req.body };
+    // 只更新传递的字段，保持其他字段不变
+    Object.keys(req.body).forEach(key => {
+        if (req.body[key] !== undefined) {
+            config[key] = req.body[key];
+        }
+    });
+
     fs.writeFileSync('config.json', JSON.stringify(config, null, 2));
     res.json({ message: '配置已保存', config });
 });
 
-// 路由 - 获取状态（返回可序列化的状态）
+// 路由 - 获取状态
 app.get('/api/status', (req, res) => {
-    // 创建一个可序列化的状态副本
     const serializableState = {
         monitoring: state.monitoring,
         lastCheck: state.lastCheck,
+        dockerLoggedIn: state.dockerLoggedIn,
         repositories: { ...state.repositories }
     };
-
     res.json(serializableState);
 });
 
+// 路由 - 获取单个仓库状态
+app.get('/api/repo/:repoId', (req, res) => {
+    const repoId = req.params.repoId;
+    const repo = config.repositories.find(r => r.id === repoId);
+    const repoState = state.repositories[repoId];
+
+    if (!repo || !repoState) {
+        return res.status(404).json({ message: '仓库未找到' });
+    }
+
+    res.json({
+        config: repo,
+        state: repoState
+    });
+});
+
+// 路由 - 测试Docker登录
+app.post('/api/docker/login', async (req, res) => {
+    const { username, password, registry } = req.body;
+
+    try {
+        const loginResult = await dockerLogin(username, password, registry);
+        state.dockerLoggedIn = loginResult.success;
+
+        if (loginResult.success) {
+            // 保存登录凭证到配置
+            config.dockerUsername = username;
+            config.dockerPassword = password;
+            config.aliyunRegistry = registry;
+            fs.writeFileSync('config.json', JSON.stringify(config, null, 2));
+
+            res.json({ message: 'Docker登录成功', loggedIn: true });
+        } else {
+            res.status(401).json({
+                message: 'Docker登录失败',
+                error: loginResult.error,
+                loggedIn: false
+            });
+        }
+    } catch (error) {
+        res.status(500).json({
+            message: '登录测试失败',
+            error: error.message,
+            loggedIn: false
+        });
+    }
+});
+
+// Docker登录函数
+async function dockerLogin(username, password, registry) {
+    return new Promise((resolve) => {
+        if (!username || !password) {
+            resolve({ success: false, error: '用户名和密码不能为空' });
+            return;
+        }
+
+        const loginCommand = `echo '${password}' | docker login --username='${username}' --password-stdin ${registry}`;
+
+        exec(loginCommand, (error, stdout, stderr) => {
+            if (error) {
+                console.error('Docker登录失败:', stderr || error.message);
+                resolve({ success: false, error: stderr || error.message });
+            } else {
+                console.log('Docker登录成功');
+                resolve({ success: true });
+            }
+        });
+    });
+}
+
+// 确保Docker已登录
+async function ensureDockerLoggedIn() {
+    if (state.dockerLoggedIn) {
+        return true;
+    }
+
+    if (!config.dockerUsername || !config.dockerPassword) {
+        throw new Error('Docker用户名或密码未配置');
+    }
+
+    const loginResult = await dockerLogin(
+        config.dockerUsername,
+        config.dockerPassword,
+        config.aliyunRegistry
+    );
+
+    state.dockerLoggedIn = loginResult.success;
+    return loginResult.success;
+}
+
 // 路由 - 开始监控
-app.post('/api/monitor/start', (req, res) => {
+app.post('/api/monitor/start', async (req, res) => {
     if (state.monitoring) {
         return res.status(400).json({ message: '监控已在运行中' });
     }
@@ -69,14 +161,21 @@ app.post('/api/monitor/start', (req, res) => {
         return res.status(400).json({ message: '请先添加Git仓库' });
     }
 
-    state.monitoring = true;
-    // 使用全局变量存储定时器，而不是state对象
-    monitorInterval = setInterval(checkAllRepositories, config.pollInterval * 60 * 1000);
+    try {
+        // 检查Docker登录
+        const loggedIn = await ensureDockerLoggedIn();
+        if (!loggedIn) {
+            return res.status(401).json({ message: 'Docker登录失败，请检查凭证' });
+        }
 
-    // 立即执行一次检查
-    checkAllRepositories();
+        state.monitoring = true;
+        monitorInterval = setInterval(checkAllRepositories, config.pollInterval * 60 * 1000);
+        checkAllRepositories();
 
-    res.json({ message: '监控已启动' });
+        res.json({ message: '监控已启动' });
+    } catch (error) {
+        res.status(500).json({ message: '启动监控失败', error: error.message });
+    }
 });
 
 // 路由 - 停止监控
@@ -94,7 +193,7 @@ app.post('/api/monitor/stop', (req, res) => {
 });
 
 // 路由 - 触发构建
-app.post('/api/build/trigger/:repoId', (req, res) => {
+app.post('/api/build/trigger/:repoId', async (req, res) => {
     const repoId = req.params.repoId;
     const repo = config.repositories.find(r => r.id === repoId);
 
@@ -102,29 +201,19 @@ app.post('/api/build/trigger/:repoId', (req, res) => {
         return res.status(404).json({ message: '仓库未找到' });
     }
 
-    triggerBuild(repo)
-        .then(imageTag => {
-            res.json({ message: '构建已触发', imageTag });
-        })
-        .catch(error => {
-            res.status(500).json({ message: '构建触发失败', error: error.message });
-        });
-});
-
-// 带重试的Git操作
-async function gitOperationWithRetry(operation, repo, retryCount = 0) {
     try {
-        return await operation();
-    } catch (error) {
-        if (retryCount < RETRY_CONFIG.maxRetries) {
-            console.log(`[${new Date().toLocaleString()}] 操作失败，第${retryCount + 1}次重试...`);
-            await new Promise(resolve => setTimeout(resolve, RETRY_CONFIG.retryDelay));
-            return await gitOperationWithRetry(operation, repo, retryCount + 1);
-        } else {
-            throw error;
+        // 确保Docker已登录
+        const loggedIn = await ensureDockerLoggedIn();
+        if (!loggedIn) {
+            return res.status(401).json({ message: 'Docker登录失败，无法构建' });
         }
+
+        const imageTag = await triggerBuild(repo);
+        res.json({ message: '构建已触发', imageTag });
+    } catch (error) {
+        res.status(500).json({ message: '构建触发失败', error: error.message });
     }
-}
+});
 
 // 检查所有仓库更新
 async function checkAllRepositories() {
@@ -142,12 +231,11 @@ async function checkAllRepositories() {
     }
 }
 
-// 检查Git更新 - 修复分支分歧问题
+// 检查Git更新
 async function checkGitUpdates(repo) {
     try {
         console.log(`[${new Date().toLocaleString()}] 检查仓库: ${repo.name} (${repo.gitUrl})`);
 
-        // 初始化仓库状态
         if (!state.repositories[repo.id]) {
             state.repositories[repo.id] = {
                 lastCheck: null,
@@ -161,10 +249,8 @@ async function checkGitUpdates(repo) {
         state.repositories[repo.id].lastCheck = new Date();
         state.repositories[repo.id].lastError = null;
 
-        // 克隆或拉取最新代码
         const repoPath = path.join('repos', repo.id);
 
-        // 确保目录存在
         if (!fs.existsSync('repos')) {
             fs.mkdirSync('repos', { recursive: true });
         }
@@ -173,143 +259,36 @@ async function checkGitUpdates(repo) {
             if (!fs.existsSync(repoPath)) {
                 console.log(`[${new Date().toLocaleString()}] 克隆仓库: ${repo.gitUrl}`);
                 await simpleGit().clone(repo.gitUrl, repoPath);
-
-                // 克隆后检查并切换到指定分支
-                const git = simpleGit(repoPath);
-                const branches = await git.branch({'-a': true});
-
-                // 检查分支是否存在
-                const remoteBranchExists = branches.all.includes(`remotes/origin/${repo.branch}`);
-                if (remoteBranchExists) {
-                    // 创建并切换到跟踪分支
-                    await git.checkout(['-b', repo.branch, `origin/${repo.branch}`]);
-                    console.log(`[${new Date().toLocaleString()}] 创建并切换到分支: ${repo.branch}`);
-                } else {
-                    console.log(`[${new Date().toLocaleString()}] 警告: 分支 ${repo.branch} 不存在，使用默认分支`);
-                }
             } else {
                 const git = simpleGit(repoPath);
-                console.log(`[${new Date().toLocaleString()}] 处理仓库: ${repo.gitUrl}`);
-
-                // 获取当前状态
-                const status = await git.status();
-                const currentBranch = status.current;
-
-                console.log(`[${new Date().toLocaleString()}] 当前分支: ${currentBranch}`);
-
-                // 保存当前更改（如果有）
-                try {
-                    await git.stash(['save', '--include-untracked', 'Auto-stash by CI system']);
-                    console.log(`[${new Date().toLocaleString()}] 已保存未提交的更改`);
-                } catch (stashError) {
-                    console.log(`[${new Date().toLocaleString()}] 无需要保存的更改`);
-                }
-
-                // 确保在正确的分支上
-                if (currentBranch !== repo.branch) {
-                    try {
-                        // 检查远程分支是否存在
-                        const branches = await git.branch({'-a': true});
-                        const remoteBranchExists = branches.all.includes(`remotes/origin/${repo.branch}`);
-
-                        if (remoteBranchExists) {
-                            // 检查本地分支是否存在
-                            const localBranchExists = branches.all.includes(repo.branch);
-
-                            if (localBranchExists) {
-                                // 切换到现有本地分支
-                                await git.checkout(repo.branch);
-                                console.log(`[${new Date().toLocaleString()}] 切换到分支: ${repo.branch}`);
-                            } else {
-                                // 创建新的跟踪分支
-                                await git.checkout(['-b', repo.branch, `origin/${repo.branch}`]);
-                                console.log(`[${new Date().toLocaleString()}] 创建并切换到跟踪分支: ${repo.branch}`);
-                            }
-                        } else {
-                            throw new Error(`远程分支 ${repo.branch} 不存在`);
-                        }
-                    } catch (checkoutError) {
-                        console.error(`[${new Date().toLocaleString()}] 切换分支失败: ${checkoutError.message}`);
-                        // 继续使用当前分支
-                    }
-                }
-
-                // 获取远程更新信息
-                console.log(`[${new Date().toLocaleString()}] 获取远程更新...`);
+                console.log(`[${new Date().toLocaleString()}] 强制同步仓库...`);
                 await git.fetch('origin');
-
-                // 检查是否有远程更新
-                const localCommit = await git.revparse([repo.branch]);
-                const remoteCommit = await git.revparse([`origin/${repo.branch}`]);
-
-                if (localCommit !== remoteCommit) {
-                    console.log(`[${new Date().toLocaleString()}] 检测到远程有更新，正在同步...`);
-
-                    try {
-                        // 方法1: 使用 rebase 策略
-                        await git.pull('origin', repo.branch, {'--rebase': 'true'});
-                        console.log(`[${new Date().toLocaleString()}] 使用 rebase 策略同步成功`);
-                    } catch (rebaseError) {
-                        console.log(`[${new Date().toLocaleString()}] rebase 失败，尝试使用 merge 策略: ${rebaseError.message}`);
-
-                        try {
-                            // 方法2: 使用 merge 策略（强制）
-                            await git.pull('origin', repo.branch, {'--no-ff': 'true'});
-                            console.log(`[${new Date().toLocaleString()}] 使用 merge 策略同步成功`);
-                        } catch (mergeError) {
-                            console.log(`[${new Date().toLocaleString()}] merge 失败，尝试重置分支: ${mergeError.message}`);
-
-                            // 方法3: 强制重置到远程分支
-                            await git.reset(['--hard', `origin/${repo.branch}`]);
-                            console.log(`[${new Date().toLocaleString()}] 强制重置到远程分支成功`);
-                        }
-                    }
-                } else {
-                    console.log(`[${new Date().toLocaleString()}] 分支已是最新，无需更新`);
-                }
-
-                // 恢复暂存的更改（如果有）
-                try {
-                    const stashList = await git.stash(['list']);
-                    if (stashList) {
-                        await git.stash(['pop']);
-                        console.log(`[${new Date().toLocaleString()}] 已恢复暂存的更改`);
-                    }
-                } catch (stashError) {
-                    console.log(`[${new Date().toLocaleString()}] 无暂存可恢复的更改`);
-                }
+                await git.reset(['--hard', `origin/${repo.branch}`]);
             }
         };
 
-        // 使用重试机制执行Git操作
         await gitOperationWithRetry(gitOperation, repo);
 
-        // 检查是否有新提交
         const git = simpleGit(repoPath);
-
-        // 获取当前分支的最新提交
-        const log = await git.log({ n: 1 });
+        const log = await git.log();
 
         if (log.latest && (!state.repositories[repo.id].lastChange || new Date(log.latest.date) > state.repositories[repo.id].lastChange)) {
             state.repositories[repo.id].lastChange = new Date();
             console.log(`[${new Date().toLocaleString()}] 检测到新提交: ${repo.name} - ${log.latest.message}`);
-            triggerBuild(repo);
-        } else {
-            console.log(`[${new Date().toLocaleString()}] 没有检测到更新: ${repo.name}`);
+
+            try {
+                await ensureDockerLoggedIn();
+                await triggerBuild(repo);
+            } catch (loginError) {
+                console.error(`[${new Date().toLocaleString()}] Docker登录失败，跳过构建: ${loginError.message}`);
+            }
         }
     } catch (error) {
-        const errorMsg = `检查仓库 ${repo.name} 更新时出错: ${error.message}`;
-        console.error(errorMsg);
-
-        // 更新仓库状态为错误
-        if (state.repositories[repo.id]) {
-            state.repositories[repo.id].lastError = errorMsg;
-            state.repositories[repo.id].lastCheck = new Date();
-        }
+        console.error(`检查仓库 ${repo.name} 更新时出错:`, error.message);
     }
 }
 
-// 触发构建 - 修复路径问题
+// 触发构建
 async function triggerBuild(repo) {
     return new Promise((resolve, reject) => {
         const timestamp = new Date().getTime();
@@ -435,40 +414,20 @@ async function triggerBuild(repo) {
     });
 }
 
-// 手动测试Git连接
-app.post('/api/test-connection/:repoId', async (req, res) => {
-    const repoId = req.params.repoId;
-    const repo = config.repositories.find(r => r.id === repoId);
-
-    if (!repo) {
-        return res.status(404).json({ message: '仓库未找到' });
-    }
-
+// 带重试的Git操作
+async function gitOperationWithRetry(operation, repo, retryCount = 0) {
     try {
-        console.log(`[${new Date().toLocaleString()}] 测试连接到: ${repo.gitUrl}`);
-
-        // 使用git ls-remote测试连接
-        const testResult = await new Promise((resolve, reject) => {
-            exec(`git ls-remote ${repo.gitUrl}`, { timeout: 10000 }, (error, stdout, stderr) => {
-                if (error) {
-                    reject(error);
-                } else {
-                    resolve(stdout);
-                }
-            });
-        });
-
-        res.json({
-            message: '连接测试成功',
-            details: testResult.split('\n').slice(0, 5) // 返回前5行结果
-        });
+        return await operation();
     } catch (error) {
-        res.status(500).json({
-            message: '连接测试失败',
-            error: error.message
-        });
+        if (retryCount < RETRY_CONFIG.maxRetries) {
+            console.log(`[${new Date().toLocaleString()}] 操作失败，第${retryCount + 1}次重试...`);
+            await new Promise(resolve => setTimeout(resolve, RETRY_CONFIG.retryDelay));
+            return await gitOperationWithRetry(operation, repo, retryCount + 1);
+        } else {
+            throw error;
+        }
     }
-});
+}
 
 // 加载保存的配置
 if (fs.existsSync('config.json')) {
@@ -489,10 +448,8 @@ if (!fs.existsSync('repos')) {
 // 启动服务器
 app.listen(port, () => {
     console.log(`多Git仓库监控与自动构建系统运行在 http://localhost:${port}`);
-    console.log('当前配置:', JSON.stringify(config, null, 2));
 });
 
-// 优雅关闭
 process.on('SIGINT', () => {
     console.log('正在关闭服务器...');
     if (monitorInterval) {

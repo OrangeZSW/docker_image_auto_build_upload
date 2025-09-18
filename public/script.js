@@ -12,6 +12,13 @@ const elements = {
     lastCheck: document.getElementById('lastCheck'),
     logContainer: document.getElementById('logContainer'),
 
+    // 新增Docker相关元素
+    aliyunRegistry: document.getElementById('aliyunRegistry'),
+    dockerUsername: document.getElementById('dockerUsername'),
+    dockerPassword: document.getElementById('dockerPassword'),
+    testDockerLogin: document.getElementById('testDockerLogin'),
+    dockerLoginStatus: document.getElementById('dockerLoginStatus'),
+
     // 模态框元素
     repoModal: document.getElementById('repoModal'),
     repoName: document.getElementById('repoName'),
@@ -72,6 +79,9 @@ async function loadConfig() {
         const config = await response.json();
 
         elements.pollInterval.value = config.pollInterval || 5;
+        elements.dockerUsername.value = config.dockerUsername || '';
+        elements.dockerPassword.value = config.dockerPassword || '';
+        elements.aliyunRegistry.value = config.aliyunRegistry || '';
         renderRepoList(config.repositories);
 
         addLog('已加载保存的配置', 'info');
@@ -264,7 +274,10 @@ async function saveConfig() {
 
     const config = {
         ...currentConfig,
-        pollInterval: parseInt(elements.pollInterval.value)
+        pollInterval: parseInt(elements.pollInterval.value),
+        aliyunRegistry: elements.aliyunRegistry.value,
+        dockerUsername: elements.dockerUsername.value,
+        dockerPassword: elements.dockerPassword.value
     };
 
     try {
@@ -510,6 +523,7 @@ function attachEventListeners() {
     });
     elements.cancelRepoEdit.addEventListener('click', closeRepoModal);
     elements.closeModal.addEventListener('click', closeRepoModal);
+    elements.testDockerLogin.addEventListener('click', testDockerLogin);
 
     // 点击模态框外部关闭
     window.addEventListener('click', (event) => {
@@ -548,6 +562,21 @@ function attachEventListeners() {
             toggleRepo(repoId);
         }
     });
+}
+
+async function testDockerLogin() {
+    const response = await fetch('/api/docker/login', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            username: elements.dockerUsername.value,
+            password: elements.dockerPassword.value,
+            registry: elements.aliyunRegistry.value
+        })
+    });
+
 }
 
 // 初始化应用
