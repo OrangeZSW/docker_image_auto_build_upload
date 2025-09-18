@@ -292,7 +292,7 @@ async function checkGitUpdates(repo) {
 async function triggerBuild(repo) {
     return new Promise((resolve, reject) => {
         const timestamp = new Date().getTime();
-        const imageTag = `${config.aliyunRegistry}/${repo.registryNamespace}/${repo.imageName}:${timestamp}`;
+        const imageTag = `${config.aliyunRegistry}/${repo.registryNamespace}/${repo.imageName}:latest`;
 
         // 添加构建记录
         const buildRecord = {
