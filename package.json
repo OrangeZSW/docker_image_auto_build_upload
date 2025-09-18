@@ -1,0 +1,25 @@
+{
+  "name": "docker_image_auto_build_upload",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OrangeZSW/docker_image_auto_build_upload.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/OrangeZSW/docker_image_auto_build_upload/issues"
+  },
+  "homepage": "https://github.com/OrangeZSW/docker_image_auto_build_upload#readme",
+  "description": "",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "simple-git": "^3.28.0"
+  }
+}
