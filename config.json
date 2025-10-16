@@ -19,10 +19,20 @@
       "imageName": "test",
       "dockerfilePath": "./Dockerfile",
       "enabled": true
+    },
+    {
+      "id": "repo-1758160949234",
+      "name": "auto-build",
+      "gitUrl": "https://github.com/OrangeZSW/docker_image_auto_build_upload.git",
+      "branch": "main",
+      "registryNamespace": "zorange",
+      "imageName": "auto-build",
+      "dockerfilePath": "./Dockerfile",
+      "enabled": true
     }
   ],
   "aliyunRegistry": "registry.cn-hangzhou.aliyuncs.com",
-  "pollInterval": 1,
+  "pollInterval": 5,
   "dockerUsername": "aliyun1893310696",
   "dockerPassword": "Zhusiwu202425"
 }
